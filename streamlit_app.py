@@ -46,7 +46,6 @@ def load_data() -> pd.DataFrame:
 
 def extract_minutes(x):
     if isinstance(x, str) and "min" in x:
-        # e.g., "90 min" -> 90
         try:
             return pd.to_numeric(x.split()[0], errors="coerce")
         except Exception:
@@ -56,7 +55,6 @@ def extract_minutes(x):
 
 def extract_seasons(x):
     if isinstance(x, str) and "Season" in x:
-        # e.g., "1 Season" or "2 Seasons" -> 1 or 2
         try:
             return pd.to_numeric(x.split()[0], errors="coerce")
         except Exception:
@@ -100,11 +98,13 @@ df["duration_min"] = df["duration"].apply(extract_minutes) if "duration" in df.c
 df["seasons_n"] = df["duration"].apply(extract_seasons) if "duration" in df.columns else np.nan
 df["primary_genre"] = df["genres"].apply(primary_genre_from_listed) if "genres" in df.columns else np.nan
 
-# Ratings normalization (if rating column exists)
+# Ratings normalization (robust to NaNs; avoids fillna with ndarray)
 if "rating" in df.columns:
-    df["rating_norm"] = df["rating"].map(RATING_MAP).fillna(
-        np.where(df["rating"].isna(), "Unknown", "Other")
-    )
+    col = df["rating"]
+    mapped = col.map(RATING_MAP)  # mapped to G/Teen/Mature or NaN
+    # If original is NaN -> "Unknown"; else, if mapped is NaN -> "Other"
+    rating_norm = np.where(col.isna(), "Unknown", mapped.fillna("Other"))
+    df["rating_norm"] = pd.Series(rating_norm, index=df.index, dtype="object")
 else:
     df["rating_norm"] = "Unknown"
 
@@ -300,6 +300,7 @@ with tab4:
         .properties(height=360)
     )
     st.altair_chart(stacked, use_container_width=True)
+
 
 # ===== Raw sample =====
 st.markdown("### Sample (first 20 rows)")
