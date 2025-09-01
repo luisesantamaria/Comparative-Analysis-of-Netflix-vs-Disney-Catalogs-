@@ -1,11 +1,3 @@
-# streamlit_app.py
-# ------------------------------------------------------------
-# Netflix vs Disney+ — Catalog Explorer (Streamlit)
-# Data are loaded from /data in this repository:
-#   - data/netflix_titles.csv
-#   - data/disney_plus_titles.csv
-# ------------------------------------------------------------
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -19,9 +11,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# ------------------------
-# Helpers & preprocessing
-# ------------------------
 @st.cache_data(show_spinner=False)
 def load_data() -> pd.DataFrame:
     nf = pd.read_csv("data/netflix_titles.csv", encoding="utf-8", low_memory=False)
@@ -32,7 +21,6 @@ def load_data() -> pd.DataFrame:
 
     df = pd.concat([nf, dp], ignore_index=True)
 
-    # Column normalizations
     df.columns = [c.strip() for c in df.columns]
     if "listed_in" in df.columns and "genres" not in df.columns:
         df["genres"] = df["listed_in"]
@@ -89,34 +77,26 @@ def normalize_genre_token(g):
         .replace("—", "-")
         .replace("–", "-")
     )
-    # tratar &, 'and' y guiones como equivalentes
     low = re.sub(r"\band\b", "&", low)
-    low = re.sub(r"\s*-\s*", " & ", low)   # guiones -> &
-    low = re.sub(r"\s*&\s*", " & ", low)   # normalizar & con espacios
+    low = re.sub(r"\s*-\s*", " & ", low) 
+    low = re.sub(r"\s*&\s*", " & ", low)
     low = re.sub(r"\s+", " ", low).strip()
 
-    # 1) Stand-Up Comedy se conserva
     if "stand-up" in low and "comedy" in low:
         return "Stand-Up Comedy"
 
-    # 2) Action & Adventure
     if re.search(r"\baction\b", low) and re.search(r"\badventure\b", low):
         return "Action & Adventure"
 
-    # 3) Comedy / Comedies
     if re.search(r"\bcomed(y|ies)\b", low):
         return "Comedy"
 
-    # 4) Default: Title Case
     return t.title()
 
 
 RATING_MAP = {
-    # Kids / General
     "G": "G", "TV-G": "G", "TV-Y": "G", "TV-Y7": "G", "TV-PG": "G", "PG": "G",
-    # Teen
     "PG-13": "Teen", "TV-14": "Teen",
-    # Mature
     "R": "Mature", "NC-17": "Mature", "TV-MA": "Mature",
 }
 
@@ -127,14 +107,14 @@ def normalize_rating(df: pd.DataFrame) -> pd.Series:
 
     raw = df["rating"]
     col = raw.astype(str).str.upper().str.strip()
-    mapped = col.map(RATING_MAP)  # puede contener NaN
+    mapped = col.map(RATING_MAP)
 
     out = pd.Series("Other", index=df.index, dtype="object")
-    out[raw.isna()] = "Unknown"              # NaN originales -> Unknown
+    out[raw.isna()] = "Unknown"              
     known_mask = mapped.notna()
-    out[known_mask] = mapped[known_mask]     # mapeos conocidos
+    out[known_mask] = mapped[known_mask]    
     tbg_mask = col.str.contains("TBG", na=False) & out.eq("Other")
-    out[tbg_mask] = "Teen"                   # códigos tipo TBG -> Teen
+    out[tbg_mask] = "Teen"                
 
     return out
 
@@ -143,27 +123,21 @@ def normalize_rating(df: pd.DataFrame) -> pd.Series:
 def prepare_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = df_raw.copy()
 
-    # Duration-derived
     if "duration" in df.columns:
         df["duration_min"] = df["duration"].apply(extract_minutes)
         df["seasons_n"] = df["duration"].apply(extract_seasons)
 
-    # Clean type
     if "type" in df.columns:
         df["type"] = df["type"].astype(str).str.strip().str.title().replace({"Tv Show": "TV Show"})
 
-    # Primary genre (normalizado)
     if "genres" in df.columns:
         df["primary_genre"] = df["genres"].apply(primary_genre).apply(normalize_genre_token)
 
-    # Country primary
     if "country" in df.columns:
         df["country_primary"] = df["country"].apply(country_primary)
 
-    # Ratings normalized
     df["rating_norm"] = normalize_rating(df)
 
-    # Year & decade
     if "release_year" in df.columns:
         df["release_year"] = pd.to_numeric(df["release_year"], errors="coerce")
         df = df[df["release_year"].between(1900, 2035)]
@@ -172,15 +146,9 @@ def prepare_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ----------
-# Load + FE
-# ----------
 df_raw = load_data()
 df = prepare_features(df_raw)
 
-# -------------------
-# Sidebar: Filters + cache control
-# -------------------
 st.sidebar.header("Filters")
 
 if st.sidebar.button("Clear cache & reload"):
@@ -199,7 +167,6 @@ if len(years) > 0:
 else:
     sel_years = (None, None)
 
-# Optional filters
 genres_all = df["primary_genre"].dropna().value_counts().index[:40].tolist() if "primary_genre" in df.columns else []
 sel_genre = st.sidebar.selectbox("Primary genre (optional)", ["(All)"] + genres_all, index=0)
 
@@ -208,7 +175,6 @@ sel_ratings = st.sidebar.multiselect("Rating category (optional)", ratings_all, 
 
 q = st.sidebar.text_input("Search title/description (optional)")
 
-# Apply filters
 mask = pd.Series(True, index=df.index)
 if sel_platform:
     mask &= df["platform"].isin(sel_platform)
@@ -233,9 +199,6 @@ if q:
 
 df_f = df[mask].copy()
 
-# --------------
-# Header + KPIs
-# --------------
 st.title("Netflix vs Disney+ — Catalog Explorer")
 st.caption(f"Interactive EDA. Data loaded from `/data` — Build {APP_VERSION}")
 
@@ -256,16 +219,10 @@ k6.metric("Countries (primary)", unique_countries)
 
 st.markdown("---")
 
-# ----------
-# Tabs
-# ----------
 tab_over, tab_pt, tab_trend, tab_rt, tab_gen, tab_cty, tab_rate, tab_deep, tab_data = st.tabs(
     ["Overview", "Platform & Type", "Release Trend", "Runtime & Seasons", "Genres", "Countries", "Ratings", "Deep Dives", "Data"]
 )
 
-# ----------------
-# Overview
-# ----------------
 with tab_over:
     col1, col2 = st.columns(2)
 
@@ -306,9 +263,6 @@ with tab_over:
         else:
             st.info("No data for current filter.")
 
-# ------------------------------
-# Platform & Type
-# ------------------------------
 with tab_pt:
     st.subheader("Counts by platform and type")
     counts = df_f.groupby(["platform", "type"]).size().rename("count").reset_index()
@@ -330,9 +284,6 @@ with tab_pt:
         )
         st.altair_chart(ch, use_container_width=True)
 
-# ----------------
-# Release Trend
-# ----------------
 with tab_trend:
     st.subheader("Titles released by year — totals and splits")
     base = df_f.dropna(subset=["release_year"])
@@ -340,14 +291,11 @@ with tab_trend:
     if base.empty:
         st.info("No release_year available for current filter.")
     else:
-        # Total by year
         total_year = base.groupby("release_year").size().rename("count").reset_index()
 
-        # Cumulative total
         cum_year = total_year.copy()
         cum_year["cumulative"] = cum_year["count"].cumsum()
 
-        # By platform per year
         by_plat = base.groupby(["release_year", "platform"]).size().rename("count").reset_index()
 
         c1, c2 = st.columns(2)
@@ -393,9 +341,6 @@ with tab_trend:
         )
         st.altair_chart(ch_pl, use_container_width=True)
 
-# ------------------------
-# Runtime & Seasons
-# ------------------------
 with tab_rt:
     st.subheader("Distributions — runtime (movies) & seasons (TV) by platform")
     c1, c2 = st.columns(2)
@@ -461,7 +406,6 @@ with tab_rt:
     with c4:
         st.caption("Movie runtime — ECDF by platform")
         if 'mm' in locals() and not mm.empty:
-            # ECDF FIX: acumulado y total por plataforma
             ch_ecdf = (
                 alt.Chart(mm)
                 .transform_filter(alt.datum.duration_min > 0)
@@ -492,9 +436,6 @@ with tab_rt:
             )
             st.altair_chart(ch_ecdf, use_container_width=True)
 
-# -----------
-# Genres
-# -----------
 with tab_gen:
     st.subheader("Top-15 primary genres — by platform")
     if "primary_genre" not in df_f.columns or df_f["primary_genre"].dropna().empty:
@@ -517,7 +458,6 @@ with tab_gen:
         )
         st.altair_chart(ch, use_container_width=True)
 
-        # Relative lift per platform (top-10)
         st.caption("Relative lift (over-index) by platform — top-10")
         overall = df_f["primary_genre"].value_counts()
         total = len(df_f)
@@ -546,9 +486,6 @@ with tab_gen:
             )
             st.altair_chart(ch_lift, use_container_width=True)
 
-# -------------
-# Countries
-# -------------
 with tab_cty:
     st.subheader("Top-15 countries (primary) — by platform")
     if "country_primary" not in df_f.columns or df_f["country_primary"].dropna().empty:
@@ -570,9 +507,6 @@ with tab_cty:
         )
         st.altair_chart(ch, use_container_width=True)
 
-# -----------
-# Ratings
-# -----------
 with tab_rate:
     st.subheader("Ratings mix — share and counts")
     if "rating_norm" not in df_f.columns:
@@ -618,9 +552,6 @@ with tab_rate:
                 )
                 st.altair_chart(ch_cnt, use_container_width=True)
 
-# -----------
-# Deep Dives
-# -----------
 with tab_deep:
     st.subheader("Runtime median by decade and platform (movies)")
     movies = df_f[df_f["type"].eq("Movie")].dropna(subset=["duration_min"])
@@ -644,17 +575,12 @@ with tab_deep:
     else:
         st.info("No movie runtime data available for current filter.")
 
-# -----------
-# Data (descarga y tabla)
-# -----------
 with tab_data:
     st.subheader("Data")
 
     st.dataframe(df, use_container_width=True, height=500)
 
-    # Descargas
     st.markdown("**Downloads**")
-    # 1) CSV de la base combinada completa
     csv_full = df.to_csv(index=False).encode("utf-8")
     st.download_button(
         "Download Data Catalog",
