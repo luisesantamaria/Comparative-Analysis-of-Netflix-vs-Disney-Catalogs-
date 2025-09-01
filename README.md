@@ -8,9 +8,9 @@ It covers cleaning, feature engineering, distributional comparisons, genre and c
 ---
 
 ## 🔗 Quick Access
-- [📊 Streamlit App](https://netflixvsdisneyanalysis.streamlit.app)
-- [📘 Notebook on GitHub](notebook.ipynb)
-- [📄 PDF Report](report.pdf)
+- Dashboard: [📊 Streamlit App](https://netflixvsdisneyanalysis.streamlit.app)
+- Notebook: [📘 Notebook on GitHub](notebook.ipynb)
+- PDF: [📄 PDF Report](report.pdf)
 
 ---
 
