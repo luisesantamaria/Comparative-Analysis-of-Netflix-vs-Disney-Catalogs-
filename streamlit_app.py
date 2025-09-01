@@ -1,141 +1,305 @@
 # streamlit_app.py
+# ------------------------------------------------------------
+# Netflix vs Disney+ — Catalog Explorer (Streamlit)
+# Data are loaded from /data in this repository:
+#   - data/netflix_titles.csv
+#   - data/disney_plus_titles.csv
+# ------------------------------------------------------------
+
 import streamlit as st
 import pandas as pd
 import numpy as np
+import altair as alt
 
-st.set_page_config(page_title="Netflix vs Disney+ – Catalog Explorer", layout="wide")
+st.set_page_config(
+    page_title="Netflix vs Disney+ — Catalog Explorer",
+    layout="wide",
+)
 
-@st.cache_data
-def load_data():
-    # Rutas relativas dentro del repo
-    nf_path = "data/netflix_titles.csv"
-    dz_path = "data/disney_plus_titles.csv"
+# ------------------------
+# Helpers & preprocessing
+# ------------------------
+@st.cache_data(show_spinner=False)
+def load_data() -> pd.DataFrame:
+    nf = pd.read_csv("data/netflix_titles.csv")
+    nf["platform"] = "Netflix"
 
-    # Carga robusta
-    try:
-        df_nf = pd.read_csv(nf_path)
-    except Exception as e:
-        st.error(f"Could not read {nf_path}: {e}")
-        raise
-    try:
-        df_dz = pd.read_csv(dz_path)
-    except Exception as e:
-        st.error(f"Could not read {dz_path}: {e}")
-        raise
+    dp = pd.read_csv("data/disney_plus_titles.csv")
+    dp["platform"] = "Disney+"
 
-    # Etiqueta de plataforma (por si no existe)
-    if "platform" not in df_nf.columns:
-        df_nf["platform"] = "Netflix"
-    if "platform" not in df_dz.columns:
-        df_dz["platform"] = "Disney+"
+    df = pd.concat([nf, dp], ignore_index=True)
 
-    # Unifica columnas clave si hay variantes de nombre
-    # (en tus CSV ya vienen como en el notebook, pero dejamos mapeo defensivo)
-    rename_map = {
-        "listed_in": "genres",
-        "description": "description",
-        "release_year": "release_year",
-        "title": "title",
-        "type": "type",
-        "duration": "duration",
-        "country": "country",
-        "rating": "rating",
-    }
-    df_nf = df_nf.rename(columns=rename_map)
-    df_dz = df_dz.rename(columns=rename_map)
+    # Normalize column names we depend on
+    df.columns = [c.strip() for c in df.columns]
+    # Some datasets have 'listed_in' (Netflix style); keep as-is and also mirror to 'genres'
+    if "listed_in" in df.columns and "genres" not in df.columns:
+        df["genres"] = df["listed_in"]
 
-    df = pd.concat([df_nf, df_dz], ignore_index=True)
-
-    # Normaliza 'type'
-    if "type" in df.columns:
-        df["type"] = df["type"].astype(str).str.strip().str.title()
-        df["type"] = df["type"].replace({"Tv Show": "TV Show", "Tv Show": "TV Show"})
-
-    # Feature engineering simple de duración/seasons según tu proyecto
-    def extract_minutes(x):
-        if isinstance(x, str) and "min" in x:
-            return pd.to_numeric(x.split()[0], errors="coerce")
-        return np.nan
-
-    def extract_seasons(x):
-        if isinstance(x, str) and "Season" in x:
-            return pd.to_numeric(x.split()[0], errors="coerce")
-        return np.nan
-
-    if "duration" in df.columns:
-        df["duration_min"] = df["duration"].apply(extract_minutes)
-        df["seasons_n"] = df["duration"].apply(extract_seasons)
-
-    # Limpieza básica de año
-    if "release_year" in df.columns:
-        df["release_year"] = pd.to_numeric(df["release_year"], errors="coerce")
-        df = df[df["release_year"].between(1900, 2035)]
-
-    # Primary genre
-    if "genres" in df.columns:
-        def split_clean(s):
-            if pd.isna(s): return []
-            return [t.strip() for t in str(s).split(",") if t.strip()]
-        df["genres_list"] = df["genres"].apply(split_clean)
-        df["primary_genre"] = df["genres_list"].apply(lambda xs: xs[0] if xs else np.nan)
+    # Safe minimum expected columns
+    needed = {"title", "type", "platform", "release_year", "duration", "genres"}
+    missing = needed.difference(df.columns)
+    if missing:
+        st.warning(f"Missing expected columns: {sorted(missing)} — the app will try to continue.")
 
     return df
 
-df = load_data()
 
-# ===== Sidebar filters =====
-st.sidebar.header("Filters")
-platforms = st.sidebar.multiselect(
-    "Platform", sorted(df["platform"].dropna().unique().tolist()),
-    default=sorted(df["platform"].dropna().unique().tolist())
-)
-types = st.sidebar.multiselect(
-    "Type", sorted(df["type"].dropna().unique().tolist()),
-    default=sorted(df["type"].dropna().unique().tolist())
-)
-year_min, year_max = int(df["release_year"].min()), int(df["release_year"].max())
-year_range = st.sidebar.slider("Release year", min_value=year_min, max_value=year_max,
-                               value=(max(year_min, 2000), year_max))
+def extract_minutes(x):
+    if isinstance(x, str) and "min" in x:
+        # e.g., "90 min" -> 90
+        try:
+            return pd.to_numeric(x.split()[0], errors="coerce")
+        except Exception:
+            return np.nan
+    return np.nan
 
-mask = (
-    df["platform"].isin(platforms) &
-    df["type"].isin(types) &
-    df["release_year"].between(year_range[0], year_range[1])
-)
-df_f = df.loc[mask].copy()
 
-# ===== Header =====
+def extract_seasons(x):
+    if isinstance(x, str) and "Season" in x:
+        # e.g., "1 Season" or "2 Seasons" -> 1 or 2
+        try:
+            return pd.to_numeric(x.split()[0], errors="coerce")
+        except Exception:
+            return np.nan
+    return np.nan
+
+
+def primary_genre_from_listed(s):
+    if pd.isna(s):
+        return np.nan
+    toks = [t.strip() for t in str(s).split(",") if t.strip()]
+    return toks[0] if toks else np.nan
+
+
+RATING_MAP = {
+    # Kids / General
+    "G": "G",
+    "TV-G": "G",
+    "TV-Y": "G",
+    "TV-Y7": "G",
+    "TV-PG": "G",
+    "PG": "G",
+    "PG-13": "Teen",
+    "TV-14": "Teen",
+    # Mature
+    "R": "Mature",
+    "NC-17": "Mature",
+    "TV-MA": "Mature",
+}
+# ------------------------
+
+
+# ----------
+# Load data
+# ----------
+df_raw = load_data()
+
+# Feature parsing (minutes/seasons)
+df = df_raw.copy()
+df["duration_min"] = df["duration"].apply(extract_minutes) if "duration" in df.columns else np.nan
+df["seasons_n"] = df["duration"].apply(extract_seasons) if "duration" in df.columns else np.nan
+df["primary_genre"] = df["genres"].apply(primary_genre_from_listed) if "genres" in df.columns else np.nan
+
+# Ratings normalization (if rating column exists)
+if "rating" in df.columns:
+    df["rating_norm"] = df["rating"].map(RATING_MAP).fillna(
+        np.where(df["rating"].isna(), "Unknown", "Other")
+    )
+else:
+    df["rating_norm"] = "Unknown"
+
+# Canonical type cleanup (capitalize consistently)
+if "type" in df.columns:
+    df["type"] = df["type"].astype(str).str.strip().str.title()
+
+# Filter only rows with platform + type present to avoid chart errors
+df_f = df.dropna(subset=["platform", "type"], how="any")
+
+
+# --------------
+# Page header
+# --------------
 st.title("Netflix vs Disney+ — Catalog Explorer")
 st.caption("Quick, reproducible view of the comparative EDA results. Data loaded from `/data` in this repo.")
 
-# ===== KPIs =====
+
+# -------------------
+# KPI summary up top
+# -------------------
+total_titles = len(df_f)
+movie_share = (
+    (df_f["type"].str.lower() == "movie").mean() if "type" in df_f.columns else np.nan
+)
+
+median_movie_runtime = (
+    df_f.loc[df_f["type"].str.lower() == "movie", "duration_min"].median()
+    if "duration_min" in df_f.columns and "type" in df_f.columns
+    else np.nan
+)
+
+median_tv_seasons = (
+    df_f.loc[df_f["type"].str.lower() == "tv show", "seasons_n"].median()
+    if "seasons_n" in df_f.columns and "type" in df_f.columns
+    else np.nan
+)
+
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Titles", f"{len(df_f):,}")
-c2.metric("Movies share", f"{(df_f['type'].eq('Movie').mean()*100):.1f}%")
-c3.metric("Median movie runtime", f"{df_f.loc[df_f['type'].eq('Movie'), 'duration_min'].median():.0f} min")
-c4.metric("Median TV seasons", f"{df_f.loc[df_f['type'].eq('TV Show'), 'seasons_n'].median():.1f}")
+c1.metric("Titles", f"{total_titles:,.0f}")
+c2.metric("Movies share", f"{movie_share*100:,.1f}%")
+c3.metric("Median movie runtime", f"{median_movie_runtime:,.0f} min")
+c4.metric("Median TV seasons", f"{median_tv_seasons:,.1f}")
 
-# ===== Charts =====
-tab1, tab2, tab3 = st.tabs(["By platform & type", "Release trend", "Top genres"])
 
+# ----------
+# Tabs
+# ----------
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["By platform & type", "Release trend", "Top genres", "Ratings mix"]
+)
+
+# ------------------------------
+# By platform & type  (FIXED)
+# ------------------------------
 with tab1:
     st.subheader("Counts by platform and type")
-    st.bar_chart(
-        df_f.groupby(["platform", "type"]).size().rename("count")
+
+    counts = (
+        df_f.groupby(["platform", "type"])
+            .size()
+            .rename("count")
+            .reset_index()  # Convert MultiIndex to columns (prevents KeyError)
     )
 
+    # Pivot rows = platform, columns = type
+    pivot = counts.pivot(index="platform", columns="type", values="count").fillna(0)
+
+    # Keep nice column order if both exist
+    desired_cols = [c for c in ["Movie", "Tv Show", "TV Show"] if c in pivot.columns]
+    # Normalize TV Show column name if inconsistent casing
+    if "Tv Show" in pivot.columns and "TV Show" not in pivot.columns:
+        pivot = pivot.rename(columns={"Tv Show": "TV Show"})
+        desired_cols = [c if c != "Tv Show" else "TV Show" for c in desired_cols]
+
+    if desired_cols:
+        pivot = pivot[desired_cols]
+
+    st.bar_chart(pivot)
+
+
+# ---------------
+# Release trend
+# ---------------
 with tab2:
-    st.subheader("Titles released by year")
-    st.line_chart(
-        df_f.groupby(["release_year", "platform"]).size().rename("count").unstack(fill_value=0)
+    st.subheader("Release trend")
+
+    # Overall per year
+    year_counts = (
+        df_f.dropna(subset=["release_year"])
+        .groupby("release_year")
+        .size()
+        .rename("count")
+        .reset_index()
+        .sort_values("release_year")
     )
 
+    # By platform per year
+    plat_year = (
+        df_f.dropna(subset=["release_year"])
+        .groupby(["release_year", "platform"])
+        .size()
+        .rename("count")
+        .reset_index()
+        .sort_values(["release_year", "platform"])
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Total titles released by year")
+        st.line_chart(
+            year_counts.set_index("release_year")
+        )
+
+    with c2:
+        st.caption("Titles released by year — Netflix vs Disney+")
+        chart = (
+            alt.Chart(plat_year)
+            .mark_line(point=False)
+            .encode(
+                x=alt.X("release_year:Q", title="Year"),
+                y=alt.Y("count:Q", title="Count"),
+                color=alt.Color("platform:N", title="Platform"),
+                tooltip=["release_year", "platform", "count"],
+            )
+            .properties(height=320)
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+
+# ------------
+# Top genres
+# ------------
 with tab3:
-    st.subheader("Top-15 primary genres (current filter)")
-    topg = (df_f["primary_genre"]
-            .value_counts().head(15)
-            .rename_axis("primary_genre").reset_index(name="count"))
-    st.dataframe(topg, use_container_width=True)
+    st.subheader("Top-10 primary genres — counts by platform")
+
+    # Compute top-10 overall primary genres first
+    top10 = (
+        df_f["primary_genre"]
+        .dropna()
+        .value_counts()
+        .head(10)
+        .index.tolist()
+    )
+
+    g_platform = (
+        df_f[df_f["primary_genre"].isin(top10)]
+        .groupby(["primary_genre", "platform"])
+        .size()
+        .rename("count")
+        .reset_index()
+    )
+
+    # Pivot for bar chart (rows=primary_genre)
+    g_pivot = (
+        g_platform.pivot(index="primary_genre", columns="platform", values="count")
+        .fillna(0)
+        .sort_values(by=list(g_platform["platform"].unique()), ascending=False)
+    )
+
+    st.bar_chart(g_pivot)
+
+
+# -------------
+# Ratings mix
+# -------------
+with tab4:
+    st.subheader("Ratings mix by platform (share of catalog)")
+
+    share = (
+        df_f.groupby(["platform", "rating_norm"])
+        .size()
+        .rename("count")
+        .reset_index()
+    )
+    # Convert to shares per platform
+    share["platform_total"] = share.groupby("platform")["count"].transform("sum")
+    share["share"] = share["count"] / share["platform_total"]
+
+    # Order ratings
+    rating_order = ["G", "Teen", "Mature", "Other", "Unknown"]
+    share["rating_norm"] = pd.Categorical(share["rating_norm"], categories=rating_order, ordered=True)
+
+    stacked = (
+        alt.Chart(share)
+        .mark_bar()
+        .encode(
+            x=alt.X("platform:N", title="Platform"),
+            y=alt.Y("share:Q", axis=alt.Axis(format="%"), title="Share"),
+            color=alt.Color("rating_norm:N", title="Rating"),
+            tooltip=["platform", "rating_norm", alt.Tooltip("share:Q", format=".1%")],
+        )
+        .properties(height=360)
+    )
+    st.altair_chart(stacked, use_container_width=True)
 
 # ===== Raw sample =====
 st.markdown("### Sample (first 20 rows)")
