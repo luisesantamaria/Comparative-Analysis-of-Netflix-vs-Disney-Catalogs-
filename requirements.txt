@@ -1,5 +1,4 @@
-pandas
-numpy
-matplotlib
-seaborn
-scikit-learn
+streamlit>=1.34
+pandas>=2.0
+numpy>=1.24
+altair>=5.0
