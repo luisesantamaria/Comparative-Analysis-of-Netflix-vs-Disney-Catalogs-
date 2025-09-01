@@ -1,6 +1,6 @@
 # Netflix vs Disney+ — Catalog Analysis
 
-[![Launch App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://netflixvsdisneyanalysis.streamlit.app/)
+[![Launch App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://netflixvsdisneycataloganalysis.streamlit.app/)
 
 This project provides a structured exploratory data analysis (EDA) of Netflix and Disney+ catalogs.  
 It covers cleaning, feature engineering, distributional comparisons, genre and country diversity, maturity ratings, and topic extraction using TF-IDF. 
@@ -9,7 +9,7 @@ It covers cleaning, feature engineering, distributional comparisons, genre and c
 
 ## Live Dashboard
 Explore the interactive dashboard here:  
-👉 [netflixvsdisneyanalysis.streamlit.app](https://netflixvsdisneyanalysis.streamlit.app)
+👉 [netflixvsdisneyanalysis.streamlit.app](https://netflixvsdisneycataloganalysis.streamlit.app/)
 
 ---
 
