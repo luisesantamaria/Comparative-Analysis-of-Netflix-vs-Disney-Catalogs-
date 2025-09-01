@@ -14,12 +14,6 @@ It covers cleaning, feature engineering, distributional comparisons, genre and c
 
 ---
 
-## Live Dashboard
-Explore the interactive dashboard here:  
-👉 [netflixvsdisneycataloganalysis.streamlit.app](https://netflixvsdisneycataloganalysis.streamlit.app/)
-
----
-
 ## Highlights
 - Full pipeline: from raw catalog data → cleaning → feature engineering → visual analysis.
 - Platform comparisons: runtime, release trends, genres, countries, and ratings.
