@@ -9,7 +9,7 @@ It covers cleaning, feature engineering, distributional comparisons, genre and c
 
 ## Live Dashboard
 Explore the interactive dashboard here:  
-👉 [[netflixvsdisneyanalysis.streamlit.app](https://netflixvsdisneycataloganalysis.streamlit.app/)](https://netflixvsdisneycataloganalysis.streamlit.app/)
+👉 [netflixvsdisneyanalysis.streamlit.app](https://netflixvsdisneycataloganalysis.streamlit.app/)(https://netflixvsdisneycataloganalysis.streamlit.app/)
 
 ---
 
