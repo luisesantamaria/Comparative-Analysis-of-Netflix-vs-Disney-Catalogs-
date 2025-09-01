@@ -24,3 +24,4 @@ Expected schema: `title, type, platform, release_year, duration, genres, country
 pip install -r requirements.txt
 jupyter notebook notebook.ipynb
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://luisesantamaria-comparative-analysis-of-netflix-vs-disney-catalogs.streamlit.app/)
