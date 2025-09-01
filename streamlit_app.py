@@ -12,6 +12,8 @@ import numpy as np
 import altair as alt
 import re
 
+APP_VERSION = "v3.3-ecdf+genre-normalization"
+
 st.set_page_config(
     page_title="Netflix vs Disney+ — Catalog Explorer",
     layout="wide",
@@ -72,6 +74,43 @@ def country_primary(s: str):
     return parts[0] if parts else np.nan
 
 
+def normalize_genre_token(g):
+    """
+    Unifica variantes de género para que no salgan barras duplicadas.
+    - Action & Adventure: maneja -, –, —, '&', 'and', y espacios.
+    - Comedy/Comedies: colapsa a 'Comedy' (NO tocar 'Stand-Up Comedy').
+    """
+    if pd.isna(g):
+        return np.nan
+
+    t = str(g).strip()
+    low = (
+        t.lower()
+        .replace("—", "-")
+        .replace("–", "-")
+    )
+    # tratar &, 'and' y guiones como equivalentes
+    low = re.sub(r"\band\b", "&", low)
+    low = re.sub(r"\s*-\s*", " & ", low)   # guiones -> &
+    low = re.sub(r"\s*&\s*", " & ", low)   # normalizar & con espacios
+    low = re.sub(r"\s+", " ", low).strip()
+
+    # 1) Stand-Up Comedy se conserva
+    if "stand-up" in low and "comedy" in low:
+        return "Stand-Up Comedy"
+
+    # 2) Action & Adventure
+    if re.search(r"\baction\b", low) and re.search(r"\badventure\b", low):
+        return "Action & Adventure"
+
+    # 3) Comedy / Comedies
+    if re.search(r"\bcomed(y|ies)\b", low):
+        return "Comedy"
+
+    # 4) Default: Title Case
+    return t.title()
+
+
 RATING_MAP = {
     # Kids / General
     "G": "G", "TV-G": "G", "TV-Y": "G", "TV-Y7": "G", "TV-PG": "G", "PG": "G",
@@ -80,6 +119,25 @@ RATING_MAP = {
     # Mature
     "R": "Mature", "NC-17": "Mature", "TV-MA": "Mature",
 }
+
+def normalize_rating(df: pd.DataFrame) -> pd.Series:
+    """Robusta y compatible con Py3.9; evita fillna con ndarray."""
+    if "rating" not in df.columns:
+        return pd.Series(["Unknown"] * len(df), index=df.index, dtype="object")
+
+    raw = df["rating"]
+    col = raw.astype(str).str.upper().str.strip()
+    mapped = col.map(RATING_MAP)  # puede contener NaN
+
+    out = pd.Series("Other", index=df.index, dtype="object")
+    out[raw.isna()] = "Unknown"              # NaN originales -> Unknown
+    known_mask = mapped.notna()
+    out[known_mask] = mapped[known_mask]     # mapeos conocidos
+    tbg_mask = col.str.contains("TBG", na=False) & out.eq("Other")
+    out[tbg_mask] = "Teen"                   # códigos tipo TBG -> Teen
+
+    return out
+
 
 @st.cache_data(show_spinner=False)
 def prepare_features(df_raw: pd.DataFrame) -> pd.DataFrame:
@@ -94,25 +152,16 @@ def prepare_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     if "type" in df.columns:
         df["type"] = df["type"].astype(str).str.strip().str.title().replace({"Tv Show": "TV Show"})
 
-    # Primary genre
+    # Primary genre (normalizado)
     if "genres" in df.columns:
-        df["primary_genre"] = df["genres"].apply(primary_genre)
+        df["primary_genre"] = df["genres"].apply(primary_genre).apply(normalize_genre_token)
 
     # Country primary
     if "country" in df.columns:
         df["country_primary"] = df["country"].apply(country_primary)
 
     # Ratings normalized
-    if "rating" in df.columns:
-        col = df["rating"].astype(str).str.upper().str.strip()
-        mapped = col.map(RATING_MAP)
-        # Si el original es NaN -> Unknown; si no y no mapea -> Other
-        rating_norm = np.where(df["rating"].isna(), "Unknown", mapped.fillna(
-            np.where(col.str.contains("TBG", na=False), "Teen", "Other")
-        ))
-        df["rating_norm"] = pd.Series(rating_norm, index=df.index, dtype="object")
-    else:
-        df["rating_norm"] = "Unknown"
+    df["rating_norm"] = normalize_rating(df)
 
     # Year & decade
     if "release_year" in df.columns:
@@ -130,9 +179,13 @@ df_raw = load_data()
 df = prepare_features(df_raw)
 
 # -------------------
-# Sidebar: Filters
+# Sidebar: Filters + cache control
 # -------------------
 st.sidebar.header("Filters")
+
+if st.sidebar.button("Clear cache & reload"):
+    st.cache_data.clear()
+    st.rerun()
 
 platforms = sorted(df["platform"].dropna().unique().tolist()) if "platform" in df.columns else []
 types = sorted(df["type"].dropna().unique().tolist()) if "type" in df.columns else []
@@ -140,7 +193,6 @@ years = df["release_year"].dropna().astype(int) if "release_year" in df.columns 
 
 sel_platform = st.sidebar.multiselect("Platform", platforms, default=platforms)
 sel_type = st.sidebar.multiselect("Type", types, default=types)
-
 if len(years) > 0:
     min_y, max_y = int(years.min()), int(years.max())
     sel_years = st.sidebar.slider("Release year range", min_y, max_y, (min_y, max_y))
@@ -185,7 +237,7 @@ df_f = df[mask].copy()
 # Header + KPIs
 # --------------
 st.title("Netflix vs Disney+ — Catalog Explorer")
-st.caption("Interactive view of the comparative EDA. Data loaded from `/data` in this repo.")
+st.caption(f"Interactive EDA. Data loaded from `/data` — Build {APP_VERSION}")
 
 total_titles = len(df_f)
 movie_share = (df_f["type"].eq("Movie").mean()*100) if "type" in df_f.columns else np.nan
@@ -207,8 +259,8 @@ st.markdown("---")
 # ----------
 # Tabs
 # ----------
-tab_over, tab_pt, tab_trend, tab_rt, tab_gen, tab_cty, tab_rate, tab_data = st.tabs(
-    ["Overview", "Platform & Type", "Release Trend", "Runtime & Seasons", "Genres", "Countries", "Ratings", "Data"]
+tab_over, tab_pt, tab_trend, tab_rt, tab_gen, tab_cty, tab_rate, tab_deep, tab_data = st.tabs(
+    ["Overview", "Platform & Type", "Release Trend", "Runtime & Seasons", "Genres", "Countries", "Ratings", "Deep Dives", "Data"]
 )
 
 # ----------------
@@ -246,7 +298,7 @@ with tab_over:
                     x=alt.X("platform:N", title="Platform"),
                     y=alt.Y("share:Q", title="Share", axis=alt.Axis(format="%")),
                     color=alt.Color("type:N", title="Type"),
-                    tooltip=["platform", "type", alt.Tooltip("share:Q", format=".1%")]
+                    tooltip=["platform","type", alt.Tooltip("share:Q", format=".1%")]
                 )
                 .properties(height=320)
             )
@@ -255,7 +307,7 @@ with tab_over:
             st.info("No data for current filter.")
 
 # ------------------------------
-# Platform & Type (grouped bar)
+# Platform & Type
 # ------------------------------
 with tab_pt:
     st.subheader("Counts by platform and type")
@@ -270,8 +322,8 @@ with tab_pt:
                 x=alt.X("platform:N", title="Platform"),
                 y=alt.Y("count:Q", title="Titles"),
                 color=alt.Color("type:N", title="Type"),
-                column=alt.Column("type:N", title=""),  # small multiples
-                tooltip=["platform", "type", "count"]
+                column=alt.Column("type:N", title=""),
+                tooltip=["platform","type","count"]
             )
             .resolve_scale(y="shared")
             .properties(height=320)
@@ -282,7 +334,7 @@ with tab_pt:
 # Release Trend
 # ----------------
 with tab_trend:
-    st.subheader("Titles released by year — total, by platform and by type")
+    st.subheader("Titles released by year — totals and splits")
     base = df_f.dropna(subset=["release_year"])
 
     if base.empty:
@@ -291,11 +343,12 @@ with tab_trend:
         # Total by year
         total_year = base.groupby("release_year").size().rename("count").reset_index()
 
+        # Cumulative total
+        cum_year = total_year.copy()
+        cum_year["cumulative"] = cum_year["count"].cumsum()
+
         # By platform per year
         by_plat = base.groupby(["release_year", "platform"]).size().rename("count").reset_index()
-
-        # By type per year (stacked area)
-        by_type = base.groupby(["release_year", "type"]).size().rename("count").reset_index()
 
         c1, c2 = st.columns(2)
         with c1:
@@ -313,55 +366,52 @@ with tab_trend:
             st.altair_chart(ch_tot, use_container_width=True)
 
         with c2:
-            st.caption("Titles by year — Netflix vs Disney+")
-            ch_pl = (
-                alt.Chart(by_plat)
+            st.caption("Cumulative titles by year")
+            ch_cum = (
+                alt.Chart(cum_year)
                 .mark_line()
                 .encode(
                     x=alt.X("release_year:Q", title="Year"),
-                    y=alt.Y("count:Q", title="Titles"),
-                    color=alt.Color("platform:N", title="Platform"),
-                    tooltip=["release_year","platform","count"]
+                    y=alt.Y("cumulative:Q", title="Cumulative total"),
+                    tooltip=["release_year","cumulative"]
                 )
                 .properties(height=320)
             )
-            st.altair_chart(ch_pl, use_container_width=True)
+            st.altair_chart(ch_cum, use_container_width=True)
 
-        st.caption("Movies vs TV — stacked area by year")
-        ch_type = (
-            alt.Chart(by_type)
-            .mark_area()
+        st.caption("Titles by year — Netflix vs Disney+")
+        ch_pl = (
+            alt.Chart(by_plat)
+            .mark_line()
             .encode(
                 x=alt.X("release_year:Q", title="Year"),
-                y=alt.Y("count:Q", stack=True, title="Titles"),
-                color=alt.Color("type:N", title="Type"),
-                tooltip=["release_year","type","count"]
+                y=alt.Y("count:Q", title="Titles"),
+                color=alt.Color("platform:N", title="Platform"),
+                tooltip=["release_year","platform","count"]
             )
             .properties(height=320)
         )
-        st.altair_chart(ch_type, use_container_width=True)
+        st.altair_chart(ch_pl, use_container_width=True)
 
 # ------------------------
-# Runtime & Seasons dists
+# Runtime & Seasons
 # ------------------------
 with tab_rt:
     st.subheader("Distributions — runtime (movies) & seasons (TV) by platform")
     c1, c2 = st.columns(2)
 
     with c1:
-        st.caption("Movie runtime (minutes) — overlaid by platform")
+        st.caption("Movie runtime (minutes) — histogram by platform")
         mm = df_f.loc[df_f["type"].eq("Movie"), ["platform","duration_min"]].dropna()
         if mm.empty:
             st.info("No movie runtimes available.")
         else:
-            # Build overlaid histograms via binning
-            bins = alt.Bin(maxbins=40)
             ch = (
                 alt.Chart(mm)
                 .transform_filter(alt.datum.duration_min > 0)
                 .mark_bar(opacity=0.6)
                 .encode(
-                    x=alt.X("duration_min:Q", bin=bins, title="Minutes"),
+                    x=alt.X("duration_min:Q", bin=alt.Bin(maxbins=40), title="Minutes"),
                     y=alt.Y("count()", title="Count"),
                     color=alt.Color("platform:N", title="Platform"),
                     tooltip=[alt.Tooltip("count()", title="Count")]
@@ -371,7 +421,7 @@ with tab_rt:
             st.altair_chart(ch, use_container_width=True)
 
     with c2:
-        st.caption("TV seasons — overlaid by platform")
+        st.caption("TV seasons — histogram by platform")
         ss = df_f.loc[df_f["type"].eq("TV Show"), ["platform","seasons_n"]].dropna()
         if ss.empty:
             st.info("No seasons data available.")
@@ -389,6 +439,58 @@ with tab_rt:
                 .properties(height=320)
             )
             st.altair_chart(ch2, use_container_width=True)
+
+    st.markdown("—")
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.caption("Movie runtime — boxplot by platform")
+        if 'mm' in locals() and not mm.empty:
+            ch_box = (
+                alt.Chart(mm)
+                .mark_boxplot()
+                .encode(
+                    x=alt.X("platform:N", title="Platform"),
+                    y=alt.Y("duration_min:Q", title="Minutes"),
+                    color=alt.Color("platform:N", legend=None)
+                )
+                .properties(height=320)
+            )
+            st.altair_chart(ch_box, use_container_width=True)
+
+    with c4:
+        st.caption("Movie runtime — ECDF by platform")
+        if 'mm' in locals() and not mm.empty:
+            # ECDF FIX: acumulado y total por plataforma
+            ch_ecdf = (
+                alt.Chart(mm)
+                .transform_filter(alt.datum.duration_min > 0)
+                .transform_window(
+                    cumulative_count='count(*)',
+                    sort=[{"field": "duration_min"}],
+                    groupby=["platform"]
+                )
+                .transform_joinaggregate(
+                    total='count(*)',
+                    groupby=["platform"]
+                )
+                .transform_calculate(
+                    ecdf="datum.cumulative_count / datum.total"
+                )
+                .mark_line()
+                .encode(
+                    x=alt.X("duration_min:Q", title="Minutes"),
+                    y=alt.Y("ecdf:Q", title="ECDF", axis=alt.Axis(format="%"), scale=alt.Scale(domain=[0,1])),
+                    color=alt.Color("platform:N", title="Platform"),
+                    tooltip=[
+                        alt.Tooltip("platform:N", title="Platform"),
+                        alt.Tooltip("duration_min:Q", title="Minutes", format=".0f"),
+                        alt.Tooltip("ecdf:Q", title="ECDF", format=".1%")
+                    ]
+                )
+                .properties(height=320)
+            )
+            st.altair_chart(ch_ecdf, use_container_width=True)
 
 # -----------
 # Genres
@@ -415,7 +517,7 @@ with tab_gen:
         )
         st.altair_chart(ch, use_container_width=True)
 
-        # Relative lift per platform (top-10 by lift)
+        # Relative lift per platform (top-10)
         st.caption("Relative lift (over-index) by platform — top-10")
         overall = df_f["primary_genre"].value_counts()
         total = len(df_f)
@@ -480,7 +582,6 @@ with tab_rate:
         if base.empty:
             st.info("No data for current filter.")
         else:
-            # Share by platform
             base["platform_total"] = base.groupby("platform")["count"].transform("sum")
             base["share"] = base["count"] / base["platform_total"]
             order = ["G", "Teen", "Mature", "Other", "Unknown"]
@@ -518,21 +619,47 @@ with tab_rate:
                 st.altair_chart(ch_cnt, use_container_width=True)
 
 # -----------
-# Data (only here, optional)
+# Deep Dives
+# -----------
+with tab_deep:
+    st.subheader("Runtime median by decade and platform (movies)")
+    movies = df_f[df_f["type"].eq("Movie")].dropna(subset=["duration_min"])
+    if not movies.empty:
+        med_dec = (
+            movies.groupby(["decade","platform"])["duration_min"]
+                  .median().reset_index(name="median_min")
+        )
+        ch_med = (
+            alt.Chart(med_dec)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("decade:Q", title="Decade"),
+                y=alt.Y("median_min:Q", title="Median runtime (min)"),
+                color=alt.Color("platform:N", title="Platform"),
+                tooltip=["decade","platform", alt.Tooltip("median_min:Q", format=".0f")]
+            )
+            .properties(height=360)
+        )
+        st.altair_chart(ch_med, use_container_width=True)
+    else:
+        st.info("No movie runtime data available for current filter.")
+
+# -----------
+# Data (descarga y tabla)
 # -----------
 with tab_data:
-    st.subheader("Filtered data")
-    st.caption("Preview and download the current filtered slice. This table is not shown in other tabs.")
-    with st.expander("Show sample (first 50 rows)"):
-        st.dataframe(df_f.head(50), use_container_width=True)
+    st.subheader("Data")
 
-    # Download filtered CSV
-    csv = df_f.to_csv(index=False).encode("utf-8")
+    st.dataframe(df, use_container_width=True, height=500)
+
+    # Descargas
+    st.markdown("**Downloads**")
+    # 1) CSV de la base combinada completa
+    csv_full = df.to_csv(index=False).encode("utf-8")
     st.download_button(
-        "Download filtered CSV",
-        data=csv,
-        file_name="catalog_filtered.csv",
+        "Download Data Catalog",
+        data=csv_full,
+        file_name="catalog_combined_full.csv",
         mime="text/csv",
         use_container_width=True
     )
-
