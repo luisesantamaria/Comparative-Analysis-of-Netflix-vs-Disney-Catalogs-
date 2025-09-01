@@ -10,7 +10,7 @@ It covers cleaning, feature engineering, distributional comparisons, genre and c
 ## 🔗 Quick Access
 - [📊 Streamlit App](https://netflixvsdisneyanalysis.streamlit.app)
 - [📘 Notebook on GitHub](notebook.ipynb)
-- [📄 PDF Report](report.pdf)  ← si lo subes al repo
+- [📄 PDF Report](report.pdf)
 
 ---
 
